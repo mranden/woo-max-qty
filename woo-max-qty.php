@@ -52,7 +52,7 @@ class Woo_Max_Qty {
 
         woocommerce_wp_checkbox(array(
             'id' => '_max_qty_email_restrict',
-            'label' => __('Restrict rule to email', 'woocommerce'),
+            'label' => __('Restrict rule to email / User', 'woocommerce'),
             'description' => __('Enable to restrict the maximum quantity of this product per customer email.', 'woocommerce')
         ));
 
@@ -227,8 +227,10 @@ class Woo_Max_Qty {
                     $product_name = $_product->get_name();
 
                     wc_add_notice( sprintf(__('Sorry, you can only purchase up to %s more of "%s".', 'woocommerce'), $remaining, $product_name), 'error' );
-                    
                 }
+
+
+                //wp_die(var_dump($total_purchased));
 
             }
         }
@@ -237,24 +239,52 @@ class Woo_Max_Qty {
     }
     
     private function get_customer_total_purchased($product_id, $customer_email) {
-        $customer_orders = wc_get_orders(array(
+        $total_purchased = 0;
+
+
+        
+    
+        // Get orders by email
+        $email_orders = wc_get_orders(array(
             'email' => $customer_email,
             'status' => array('wc-completed', 'wc-processing'),
             'return' => 'ids',
         ));
+
     
-        $total_purchased = 0;
-        foreach ($customer_orders as $order_id) {
-            $order = wc_get_order($order_id);
-            foreach ($order->get_items() as $item) {
-                if ($item->get_product_id() == $product_id || $item->get_variation_id() == $product_id) {
-                    $total_purchased += $item->get_quantity();
-                }
-            }
+        $total_purchased += $this->calculate_purchased_from_orders($email_orders, $product_id);
+
+        
+    
+        // If the user is logged in, get orders by user ID as well
+        if (is_user_logged_in()) {
+            $user_id = get_current_user_id();
+            $user_orders = wc_get_orders(array(
+                'customer_id' => $user_id,
+                'status' => array('wc-completed', 'wc-processing'),
+                'return' => 'ids',
+                'exclude' => $email_orders, // Exclude orders already counted by email
+            ));
+    
+            $total_purchased += $this->calculate_purchased_from_orders($user_orders, $product_id);
         }
     
         return $total_purchased;
     }
+    
+    private function calculate_purchased_from_orders($orders, $product_id) {
+        $quantity = 0;
+        foreach ($orders as $order_id) {
+            $order = wc_get_order($order_id);
+            foreach ($order->get_items() as $item) {
+                if ($item->get_product_id() == $product_id || $item->get_variation_id() == $product_id) {
+                    $quantity += $item->get_quantity();
+                }
+            }
+        }
+        return $quantity;
+    }
+    
     
 
 }
