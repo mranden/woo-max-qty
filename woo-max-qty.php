@@ -31,11 +31,14 @@ class Woo_Max_Qty {
 
         add_filter( 'rest_request_after_callbacks', [ $this, 'extend_cart_api_response' ], 10, 3 );
         
+        add_action('woocommerce_checkout_process', array($this, 'validate_checkout_max_qty'));
+
         //Translations
         add_action( 'plugins_loaded', [ $this, 'plugins_loaded' ] );
     }
     
     public function add_max_qty_field() {
+
         woocommerce_wp_text_input(array(
             'id' => '_max_qty',
             'label' => __('Maximum Quantity', 'woocommerce'),
@@ -46,42 +49,68 @@ class Woo_Max_Qty {
                 'min' => '1'
             )
         ));
+
+        woocommerce_wp_checkbox(array(
+            'id' => '_max_qty_email_restrict',
+            'label' => __('Restrict rule to email', 'woocommerce'),
+            'description' => __('Enable to restrict the maximum quantity of this product per customer email.', 'woocommerce')
+        ));
+
     }
 
     public function save_max_qty_field($post_id) {
         $max_qty = isset($_POST['_max_qty']) ? $_POST['_max_qty'] : '';
+        $max_qty_email_restrict = isset($_POST['_max_qty_email_restrict']) ? 'yes' : 'no';
+    
+        update_post_meta($post_id, '_max_qty_email_restrict', $max_qty_email_restrict);
+
         if (!empty($max_qty)) {
             update_post_meta($post_id, '_max_qty', esc_attr($max_qty));
         }
     }
 
-    public function validate_max_qty($passed, $product_id, $quantity, $variation_id = 0, $variations= array()) {
+    public function validate_max_qty($passed, $product_id, $quantity, $variation_id = 0, $variations = array()) {
         $max_qty = get_post_meta($product_id, '_max_qty', true);
-        if ($max_qty && $quantity > $max_qty) {
+        $max_qty_email_restrict = get_post_meta($product_id, '_max_qty_email_restrict', true);
+    
+        if ($max_qty_email_restrict === 'yes') {
+            $total_purchased = $this->get_customer_total_purchased($product_id, WC()->customer->get_billing_email());
+    
+            if ($total_purchased + $quantity > $max_qty) {
+                $remaining = $max_qty - $total_purchased;
+                wc_add_notice(sprintf(__('Sorry, you can only purchase up to %s more of this product.', 'woocommerce'), $remaining), 'error');
+                return false;
+            }
+        } elseif ($max_qty && $quantity > $max_qty) {
             wc_add_notice(sprintf(__('Sorry, you can only purchase up to %s of this product.', 'woocommerce'), $max_qty), 'error');
             return false;
         }
+    
         return $passed;
     }
-     // Custom function to modify the quantity input arguments
-     public function custom_qty_input_args($args, $product) {
+    
 
+    public function custom_qty_input_args($args, $product) {
+        
         $product_id = $product->get_id();
 
         $max_qty = get_post_meta($product_id, '_max_qty', true);
 
-        if( $max_qty > $args['max_value'] ) {
-            return $args;
+        $max_qty_email_restrict = get_post_meta($product_id, '_max_qty_email_restrict', true);
+    
+        if ($max_qty_email_restrict === 'yes') {
+            $total_purchased = $this->get_customer_total_purchased($product_id, WC()->customer->get_billing_email());
+            $remaining = max($max_qty - $total_purchased, 0);
+            $args['max_value'] = min($remaining, $args['max_value']);
+        } else {
+            $args['max_value'] = min($max_qty, $args['max_value']);
         }
-
-        if (empty($max_qty)) {
-            return $args; 
-        }
-        
-        $args['max_value'] = $max_qty; // Set maximum value for quantity input
-
+    
         return $args;
     }
+    
+
+
 
     public function modify_max_qty_message($max_string, $max_value) {
 
@@ -167,6 +196,66 @@ class Woo_Max_Qty {
 
         return $response;
 	}
+
+
+    /*
+    * Checkout validation
+    */
+
+    public function validate_checkout_max_qty() {
+        
+        $cart_items = WC()->cart->get_cart();
+    
+        //var_dump($cart_items);
+    
+    
+        foreach ($cart_items as $cart_item_key => $values) {
+            $_product = $values['data'];
+            
+            $product_id = $_product->get_id();
+
+
+            $quantity = $values['quantity'];
+            $max_qty = get_post_meta($product_id, '_max_qty', true);
+            $max_qty_email_restrict = get_post_meta($product_id, '_max_qty_email_restrict', true);
+
+            if ($max_qty_email_restrict === 'yes') {
+                $total_purchased = $this->get_customer_total_purchased($product_id, $_POST['billing_email']);    
+                
+                if ($total_purchased + $quantity > $max_qty) {
+                    $remaining = $max_qty - $total_purchased;
+                    $product_name = $_product->get_name();
+
+                    wc_add_notice( sprintf(__('Sorry, you can only purchase up to %s more of "%s".', 'woocommerce'), $remaining, $product_name), 'error' );
+                    
+                }
+
+            }
+        }
+
+
+    }
+    
+    private function get_customer_total_purchased($product_id, $customer_email) {
+        $customer_orders = wc_get_orders(array(
+            'email' => $customer_email,
+            'status' => array('wc-completed', 'wc-processing'),
+            'return' => 'ids',
+        ));
+    
+        $total_purchased = 0;
+        foreach ($customer_orders as $order_id) {
+            $order = wc_get_order($order_id);
+            foreach ($order->get_items() as $item) {
+                if ($item->get_product_id() == $product_id || $item->get_variation_id() == $product_id) {
+                    $total_purchased += $item->get_quantity();
+                }
+            }
+        }
+    
+        return $total_purchased;
+    }
+    
 
 }
 
