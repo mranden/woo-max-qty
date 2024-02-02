@@ -96,6 +96,9 @@ class Woo_Max_Qty {
 
         $max_qty = get_post_meta($product_id, '_max_qty', true);
 
+        if( !$max_qty )
+            return $args;
+
         $max_qty_email_restrict = get_post_meta($product_id, '_max_qty_email_restrict', true);
     
         if ($max_qty_email_restrict === 'yes') {
